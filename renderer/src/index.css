@@ -1,0 +1,192 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Sandstone Theme - Light Mode */
+@layer base {
+  :root {
+    --text-50: #f2f2f2;
+    --text-100: #e6e6e6;
+    --text-200: #cccccc;
+    --text-300: #b3b3b3;
+    --text-400: #999999;
+    --text-500: #808080;
+    --text-600: #666666;
+    --text-700: #4d4d4d;
+    --text-800: #333333;
+    --text-900: #1a1a1a;
+    --text-950: #0d0d0d;
+    
+    --background-50: #f2f2f2;
+    --background-100: #e6e6e5;
+    --background-200: #cdcdcb;
+    --background-300: #b3b3b2;
+    --background-400: #9a9a98;
+    --background-500: #81817e;
+    --background-600: #676765;
+    --background-700: #4d4d4c;
+    --background-800: #343432;
+    --background-900: #1a1a19;
+    --background-950: #0d0d0d;
+    
+    --primary-50: #fbf1ea;
+    --primary-100: #f6e4d5;
+    --primary-200: #eec9aa;
+    --primary-300: #e5ad80;
+    --primary-400: #dc9256;
+    --primary-500: #d4772b;
+    --primary-600: #a95f23;
+    --primary-700: #7f471a;
+    --primary-800: #553011;
+    --primary-900: #2a1809;
+    --primary-950: #150c04;
+    
+    --secondary-50: #fcf3e9;
+    --secondary-100: #f8e6d3;
+    --secondary-200: #f2cda6;
+    --secondary-300: #ebb47a;
+    --secondary-400: #e49c4e;
+    --secondary-500: #de8321;
+    --secondary-600: #b1691b;
+    --secondary-700: #854e14;
+    --secondary-800: #59340d;
+    --secondary-900: #2c1a07;
+    --secondary-950: #160d03;
+    
+    --accent-50: #f7f8ed;
+    --accent-100: #f0f1da;
+    --accent-200: #fbe4b1;
+    --accent-300: #f0d7a8;
+    --accent-400: #f0d394;
+    --accent-500: #f8cc73;
+    --accent-600: #e1b577;
+    --accent-700: #e4a75d;
+    --accent-800: #794d1a65;
+    --accent-900: #d49a4200;
+    --accent-950: #120d07;
+  }
+
+  /* Sandstone Theme - Dark Mode */
+  .dark {
+    --text-50: #0d0d0d;
+    --text-100: #1a1a1a;
+    --text-200: #333333;
+    --text-300: #4d4d4d;
+    --text-400: #666666;
+    --text-500: #808080;
+    --text-600: #999999;
+    --text-700: #b3b3b3;
+    --text-800: #cccccc;
+    --text-900: #e6e6e6;
+    --text-950: #f2f2f2;
+    
+    --background-50: #0d0d0d;
+    --background-100: #1a1a19;
+    --background-200: #343432;
+    --background-300: #4d4d4c;
+    --background-400: #676765;
+    --background-500: #81817e;
+    --background-600: #9a9a98;
+    --background-700: #b3b3b2;
+    --background-800: #cdcdcb;
+    --background-900: #e6e6e5;
+    --background-950: #f2f2f2;
+    
+    --primary-50: #150c04;
+    --primary-100: #2a1809;
+    --primary-200: #553011;
+    --primary-300: #7f471a;
+    --primary-400: #a95f23;
+    --primary-500: #d4772b;
+    --primary-600: #dc9256;
+    --primary-700: #e5ad80;
+    --primary-800: #eec9aa;
+    --primary-900: #f6e4d5;
+    --primary-950: #fbf1ea;
+    
+    --secondary-50: #160d03;
+    --secondary-100: #2c1a07;
+    --secondary-200: #59340d;
+    --secondary-300: #854e14;
+    --secondary-400: #b1691b;
+    --secondary-500: #de8321;
+    --secondary-600: #e49c4e;
+    --secondary-700: #ebb47a;
+    --secondary-800: #f2cda6;
+    --secondary-900: #f8e6d3;
+    --secondary-950: #fcf3e9;
+    
+    --accent-50: #121207;
+    --accent-100: #24250e;
+    --accent-200: #48491d;
+    --accent-300: #6c6e2b;
+    --accent-400: #909339;
+    --accent-500: #b4b847;
+    --accent-600: #c3c66c;
+    --accent-700: #d2d491;
+    --accent-800: #e1e2b6;
+    --accent-900: #f0f1da;
+    --accent-950: #f7f8ed;
+
+
+    --accent-50: #120d07;
+    --accent-100: #d49a4200;
+    --accent-200: #794d1a65;
+    --accent-300: #e4a75d;
+    --accent-400: #e1b577;
+    --accent-500: #e3c589fa;
+    --accent-600: #f0d394;
+    --accent-700: #f0d7a8;
+    --accent-800: #fbe4b1;
+    --accent-900: #f0f1da;
+    --accent-950: #f7f8ed;
+  }
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: var(--background-100);
+  color: var(--text-950);
+}
+
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--background-200);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--background-400);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--background-500);
+}
