@@ -9,3 +9,4 @@ export { Timeline } from './Timeline';
 export { ExportSettings } from './ExportSettings';
 export { WelcomeScreen } from './WelcomeScreen';
 export { SettingsScreen } from './SettingsScreen';
+export { ColorGrading } from './ColorGrading';

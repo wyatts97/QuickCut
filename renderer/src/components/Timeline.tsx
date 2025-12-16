@@ -1,32 +1,42 @@
-import { useRef, useState, useCallback, useEffect } from 'react';
+import { useRef, useState, useCallback, useEffect, useMemo } from 'react';
 import { useStore, TimelineClip } from '../store/useStore';
+import { TimelineClipComponent, TimelineControls, TimelineRuler } from './Timeline/index';
+import { TimelineClipThumbnails } from './Timeline/TimelineClipThumbnails';
+import { log } from '../utils/logger';
+
+// Virtual scrolling configuration
+const VIRTUAL_SCROLL_BUFFER = 200; // pixels
+const CLIP_HEIGHT = 48; // pixels
+const TIMELINE_HEIGHT = 120; // pixels
 
 export function Timeline() {
   const {
     clips,
+    videoFile,
     playheadTime,
     timelineZoom,
-    videoFile,
-    crop,
-    setCrop,
+    isPlaying,
     setPlayheadTime,
     setTimelineZoom,
+    setIsPlaying,
     splitClipAtPlayhead,
     rippleDelete,
     updateClip,
     addVideoToTimeline,
+    crop,
+    setCrop,
   } = useStore();
 
   const timelineRef = useRef<HTMLDivElement>(null);
+  const [visibleRange, setVisibleRange] = useState({ start: 0, end: 1000 }); // pixels
   const [isDraggingPlayhead, setIsDraggingPlayhead] = useState(false);
   const [selectedClipIds, setSelectedClipIds] = useState<string[]>([]);
   const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
   const [draggedClip, setDraggedClip] = useState<{ id: string; startX: number; originalStart: number } | null>(null);
   const dragOffsetRef = useRef<number>(0);
   const clipElementsRef = useRef<Map<string, HTMLDivElement>>(new Map());
-  const [isPlaying, setIsPlaying] = useState(false);
   const playIntervalRef = useRef<number | null>(null);
-  
+
   // Snapping configuration
   const SNAP_THRESHOLD = 10; // pixels
   const [snapLinePosition, setSnapLinePosition] = useState<number | null>(null);
@@ -36,10 +46,10 @@ export function Timeline() {
     const clipEnd = clip.startTime + (clip.outPoint - clip.inPoint);
     return Math.max(max, clipEnd);
   }, videoFile?.duration || 10);
-  
-  // Always show at least 120 seconds (2 min) of timeline for aesthetics
-  const minTimelineSeconds = 120;
-  const totalDuration = Math.max(clipsDuration, minTimelineSeconds);
+
+  // Extend timeline to next 5-second increment beyond actual content
+  const nextFiveSecondIncrement = Math.ceil((clipsDuration + 1) / 5) * 5;
+  const totalDuration = Math.max(nextFiveSecondIncrement, 10); // Minimum 10 seconds for very short videos
 
   const timelineWidth = totalDuration * timelineZoom + 200; // Extra space at end
   const timelineInset = 8; // px-2
@@ -48,9 +58,100 @@ export function Timeline() {
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
-    const ms = Math.floor((seconds % 1) * 100);
-    return `${mins}:${secs.toString().padStart(2, '0')}.${ms.toString().padStart(2, '0')}`;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
+
+  // Virtual scrolling - calculate visible clips
+  const visibleClips = useMemo(() => {
+    return clips;
+  }, [clips]);
+
+  // Calculate gaps between clips for visual indicators
+  const timelineGaps = useMemo(() => {
+    if (clips.length === 0) return [];
+
+    const sortedClips = [...clips].sort((a, b) => a.startTime - b.startTime);
+    const gaps: { start: number; end: number; duration: number }[] = [];
+
+    // Check for gap at the beginning
+    if (sortedClips[0].startTime > 0.1) {
+      gaps.push({
+        start: 0,
+        end: sortedClips[0].startTime,
+        duration: sortedClips[0].startTime
+      });
+    }
+
+    // Check for gaps between clips
+    for (let i = 0; i < sortedClips.length - 1; i++) {
+      const currentClip = sortedClips[i];
+      const nextClip = sortedClips[i + 1];
+      const currentEnd = currentClip.startTime + (currentClip.outPoint - currentClip.inPoint);
+      const nextStart = nextClip.startTime;
+
+      if (nextStart - currentEnd > 0.1) { // Only show gaps larger than 0.1s
+        gaps.push({
+          start: currentEnd,
+          end: nextStart,
+          duration: nextStart - currentEnd
+        });
+      }
+    }
+
+    return gaps;
+  }, [clips]);
+
+  // Calculate visible gaps (for virtual scrolling)
+  const visibleGaps = useMemo(() => {
+    const { start, end } = visibleRange;
+    const bufferStart = start - VIRTUAL_SCROLL_BUFFER;
+    const bufferEnd = end + VIRTUAL_SCROLL_BUFFER;
+
+    return timelineGaps.filter(gap => {
+      const gapLeft = gap.start * timelineZoom + 200;
+      const gapRight = gap.end * timelineZoom + 200;
+      return gapRight >= bufferStart && gapLeft <= bufferEnd;
+    });
+  }, [timelineGaps, visibleRange, timelineZoom]);
+
+  // Update visible range on scroll
+  const handleScroll = useCallback(() => {
+    if (!timelineRef.current) return;
+
+    const scrollLeft = timelineRef.current.scrollLeft;
+    const containerWidth = timelineRef.current.clientWidth;
+
+    setVisibleRange({
+      start: scrollLeft,
+      end: scrollLeft + containerWidth
+    });
+  }, []);
+
+  // Optimized clip selection handlers
+  const handleClipSelect = useCallback((clipId: string, isShiftClick: boolean) => {
+    if (isShiftClick) {
+      setSelectedClipIds(prev => {
+        if (prev.includes(clipId)) {
+          return prev.filter(id => id !== clipId);
+        } else {
+          return [...prev, clipId];
+        }
+      });
+    } else {
+      setSelectedClipIds([clipId]);
+    }
+  }, []);
+
+  const handleClipDragStart = useCallback((clipId: string, startX: number) => {
+    const clip = clips.find(c => c.id === clipId);
+    if (!clip) return;
+
+    setDraggedClip({
+      id: clipId,
+      startX,
+      originalStart: clip.startTime
+    });
+  }, [clips]);
 
   // Get all clip edge points for playhead snapping
   const getPlayheadSnapPoints = useCallback(() => {
@@ -60,7 +161,7 @@ export function Timeline() {
       points.push(clip.startTime);
       points.push(clipEnd);
     });
-    return points;
+    return points.sort((a, b) => a - b);
   }, [clips]);
 
   // Snap playhead time to nearby clip edges
@@ -69,7 +170,7 @@ export function Timeline() {
     const snapPoints = getPlayheadSnapPoints();
     let snappedTime = time;
     let minDistance = thresholdTime;
-    
+
     for (const point of snapPoints) {
       const distance = Math.abs(time - point);
       if (distance < minDistance) {
@@ -77,7 +178,7 @@ export function Timeline() {
         snappedTime = point;
       }
     }
-    
+
     return snappedTime;
   }, [timelineZoom, getPlayheadSnapPoints]);
 
@@ -87,16 +188,36 @@ export function Timeline() {
     const rect = timelineRef.current.getBoundingClientRect();
     const scrollLeft = timelineRef.current.scrollLeft;
     const x = e.clientX - rect.left + scrollLeft;
-    const rawTime = Math.max(0, x / timelineZoom);
+    const rawTime = Math.max(0, (x - timelineInset) / timelineZoom);
     const time = snapPlayheadTime(rawTime);
     setPlayheadTime(time);
-  }, [timelineZoom, setPlayheadTime, snapPlayheadTime]);
+  }, [timelineZoom, setPlayheadTime, snapPlayheadTime, timelineInset]);
 
-  const handlePlayheadMouseDown = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
+  // Timeline mouse handlers for playhead positioning
+  const handleTimelineMouseDown = useCallback((e: React.MouseEvent) => {
+    if (!timelineRef.current) return;
+    const rect = timelineRef.current.getBoundingClientRect();
+    const scrollLeft = timelineRef.current.scrollLeft;
+    const x = e.clientX - rect.left + scrollLeft;
+    const rawTime = Math.max(0, (x - timelineInset) / timelineZoom);
+    const time = snapPlayheadTime(rawTime);
+    setPlayheadTime(time);
     setIsDraggingPlayhead(true);
-  };
+  }, [timelineZoom, setPlayheadTime, snapPlayheadTime, timelineInset]);
+
+  const handleTimelineMouseMove = useCallback((e: React.MouseEvent) => {
+    if (!isDraggingPlayhead || !timelineRef.current) return;
+    const rect = timelineRef.current.getBoundingClientRect();
+    const scrollLeft = timelineRef.current.scrollLeft;
+    const x = e.clientX - rect.left + scrollLeft;
+    const rawTime = Math.max(0, (x - timelineInset) / timelineZoom);
+    const time = snapPlayheadTime(rawTime);
+    setPlayheadTime(time);
+  }, [isDraggingPlayhead, timelineZoom, setPlayheadTime, snapPlayheadTime, timelineInset]);
+
+  const handleTimelineMouseUp = useCallback(() => {
+    setIsDraggingPlayhead(false);
+  }, []);
 
   useEffect(() => {
     if (!isDraggingPlayhead) return;
@@ -106,7 +227,7 @@ export function Timeline() {
       const rect = timelineRef.current.getBoundingClientRect();
       const scrollLeft = timelineRef.current.scrollLeft;
       const x = e.clientX - rect.left + scrollLeft;
-      const rawTime = Math.max(0, x / timelineZoom);
+      const rawTime = Math.max(0, (x - timelineInset) / timelineZoom);
       const time = snapPlayheadTime(rawTime);
       setPlayheadTime(time);
     };
@@ -119,20 +240,22 @@ export function Timeline() {
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [isDraggingPlayhead, timelineZoom, setPlayheadTime, snapPlayheadTime]);
+  }, [isDraggingPlayhead, timelineZoom, setPlayheadTime, snapPlayheadTime, timelineInset]);
 
   // Handle clip selection with multi-select support
   const handleClipMouseDown = (e: React.MouseEvent, clip: TimelineClip, clipIndex: number) => {
     e.preventDefault();
     e.stopPropagation();
-    
+
     if (e.ctrlKey || e.metaKey) {
       // Ctrl+click: toggle selection
-      setSelectedClipIds(prev => 
-        prev.includes(clip.id) 
-          ? prev.filter(id => id !== clip.id)
-          : [...prev, clip.id]
-      );
+      setSelectedClipIds(prev => {
+        if (prev.includes(clip.id)) {
+          return prev.filter(id => id !== clip.id);
+        } else {
+          return [...prev, clip.id];
+        }
+      });
       setLastSelectedIndex(clipIndex);
     } else if (e.shiftKey && lastSelectedIndex !== null) {
       // Shift+click: range selection
@@ -145,7 +268,7 @@ export function Timeline() {
       setSelectedClipIds([clip.id]);
       setLastSelectedIndex(clipIndex);
     }
-    
+
     // Start drag
     setDraggedClip({
       id: clip.id,
@@ -172,7 +295,7 @@ export function Timeline() {
     let snappedTime = time;
     let minDistance = thresholdTime;
     let snapPoint: number | null = null;
-    
+
     // Check snap for clip start
     for (const point of snapPoints) {
       const distance = Math.abs(time - point);
@@ -182,7 +305,7 @@ export function Timeline() {
         snapPoint = point;
       }
     }
-    
+
     // Also check snap for clip end
     const clipEnd = time + clipDuration;
     for (const point of snapPoints) {
@@ -193,17 +316,17 @@ export function Timeline() {
         snapPoint = point;
       }
     }
-    
+
     return { time: Math.max(0, snappedTime), snapPoint };
   }, [timelineZoom]);
 
   useEffect(() => {
     if (!draggedClip) return;
-    
+
     const draggedClipData = clips.find(c => c.id === draggedClip.id);
     const clipDuration = draggedClipData ? draggedClipData.outPoint - draggedClipData.inPoint : 0;
     const snapPoints = getSnapPoints(draggedClip.id);
-    
+
     // Initialize dragOffsetRef to original position (fixes snap-to-zero on click)
     dragOffsetRef.current = draggedClip.originalStart;
     let hasMoved = false;
@@ -214,18 +337,18 @@ export function Timeline() {
       if (Math.abs(dx) > 3) {
         hasMoved = true;
       }
-      
+
       const deltaTime = dx / timelineZoom;
       const rawStart = Math.max(0, draggedClip.originalStart + deltaTime);
-      
+
       // Apply snapping
       const { time: newStart, snapPoint } = snapToPoint(rawStart, snapPoints, clipDuration);
-      
+
       // Show snap line indicator
       setSnapLinePosition(snapPoint);
-      
+
       dragOffsetRef.current = newStart;
-      
+
       // Direct DOM manipulation for smooth visual feedback
       const clipEl = clipElementsRef.current.get(draggedClip.id);
       if (clipEl) {
@@ -263,33 +386,63 @@ export function Timeline() {
     }
   }, [isDraggingPlayhead, draggedClip]);
 
+  // Initialize virtual scrolling and update visible range
+  useEffect(() => {
+    const timeline = timelineRef.current;
+    if (!timeline) return;
+
+    // Initial visible range calculation
+    handleScroll();
+
+    // Add scroll listener for virtual scrolling
+    timeline.addEventListener('scroll', handleScroll, { passive: true });
+
+    return () => {
+      timeline.removeEventListener('scroll', handleScroll);
+    };
+  }, [handleScroll]);
+
   // Handle split at playhead
   const handleSplit = () => {
     if (selectedClipIds.length === 0) return;
     // Split the first selected clip
     splitClipAtPlayhead(selectedClipIds[0]);
+    log.timeline('Split clip at playhead', { clipId: selectedClipIds[0], time: playheadTime });
   };
 
   // Handle delete selected clips
   const handleDelete = () => {
     if (selectedClipIds.length === 0) return;
+
     // Delete all selected clips
     selectedClipIds.forEach(id => rippleDelete(id));
     setSelectedClipIds([]);
-    setLastSelectedIndex(null);
+    log.timeline('Deleted clips', { clipIds: selectedClipIds });
   };
 
   // Handle adding a new video to the timeline
   const handleAddVideo = async () => {
-    const file = await window.quickcut.openFile();
-    if (file) {
-      addVideoToTimeline(file);
+    try {
+      const result = await window.quickcut.openFile();
+      if (result) {
+        addVideoToTimeline(result);
+        log.timeline('Added video to timeline', { file: result.name });
+      }
+    } catch (error) {
+      log.error('Timeline', 'Failed to add video', error);
     }
   };
 
   // Zoom controls
-  const handleZoomIn = () => setTimelineZoom(timelineZoom + 20);
-  const handleZoomOut = () => setTimelineZoom(timelineZoom - 20);
+  const handleZoomIn = () => {
+    setTimelineZoom(Math.min(timelineZoom * 1.2, 500));
+    log.timeline('Zoomed in', { newZoom: timelineZoom * 1.2 });
+  };
+
+  const handleZoomOut = () => {
+    setTimelineZoom(Math.max(timelineZoom / 1.2, 10));
+    log.timeline('Zoomed out', { newZoom: timelineZoom / 1.2 });
+  };
 
   // Playback controls
   const togglePlay = useCallback(() => {
@@ -305,11 +458,11 @@ export function Timeline() {
       setIsPlaying(true);
       const startTime = Date.now();
       const startPlayhead = playheadTime;
-      
+
       playIntervalRef.current = window.setInterval(() => {
         const elapsed = (Date.now() - startTime) / 1000;
         const newTime = startPlayhead + elapsed;
-        
+
         if (newTime >= totalDuration) {
           setPlayheadTime(0);
           if (playIntervalRef.current) {
@@ -322,7 +475,7 @@ export function Timeline() {
         }
       }, 33); // ~30fps update
     }
-  }, [isPlaying, playheadTime, totalDuration, setPlayheadTime]);
+  }, [isPlaying, playheadTime, totalDuration, setPlayheadTime, setIsPlaying]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -349,12 +502,12 @@ export function Timeline() {
     const majorMarkers: number[] = [];
     const minorMarkers: number[] = [];
     const microMarkers: number[] = [];
-    
+
     // Determine intervals based on zoom level
     let majorInterval = 1; // seconds
     let minorInterval = 0.5; // half-seconds
     let microInterval = 0.1; // 100ms
-    
+
     if (timelineZoom < 40) {
       majorInterval = 5;
       minorInterval = 1;
@@ -368,9 +521,9 @@ export function Timeline() {
       minorInterval = 0.5;
       microInterval = 0.1;
     }
-    
+
     const maxTime = totalDuration + 10;
-    
+
     // Generate micro markers (smallest ticks)
     for (let t = 0; t <= maxTime; t += microInterval) {
       const rounded = Math.round(t * 1000) / 1000;
@@ -378,7 +531,7 @@ export function Timeline() {
         microMarkers.push(rounded);
       }
     }
-    
+
     // Generate minor markers (medium ticks)
     for (let t = 0; t <= maxTime; t += minorInterval) {
       const rounded = Math.round(t * 1000) / 1000;
@@ -386,15 +539,15 @@ export function Timeline() {
         minorMarkers.push(rounded);
       }
     }
-    
+
     // Generate major markers (with labels)
     for (let t = 0; t <= maxTime; t += majorInterval) {
       majorMarkers.push(t);
     }
-    
+
     return { majorMarkers, minorMarkers, microMarkers };
   };
-  
+
   const { majorMarkers, minorMarkers, microMarkers } = generateMarkers();
 
   if (!videoFile) {
@@ -406,297 +559,125 @@ export function Timeline() {
   }
 
   return (
-    <div className="h-48 bg-background-200 border-t border-background-300 flex flex-col">
-      {/* Toolbar */}
-      <div className="flex items-center gap-2 px-4 py-2 border-b border-background-300 bg-background-100">
-        {/* Play button */}
-        <button
-          onClick={togglePlay}
-          className="p-1.5 bg-background-300 hover:bg-background-400 rounded-lg transition-colors"
-          title={isPlaying ? 'Pause (Space)' : 'Play (Space)'}
-        >
-          {isPlaying ? (
-            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" />
-            </svg>
-          ) : (
-            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M8 5v14l11-7z" />
-            </svg>
-          )}
-        </button>
-        
-        <span className="text-xs text-text-800 font-mono min-w-[80px]">
-          {formatTime(playheadTime)}
-        </span>
-        
-        <div className="w-px h-4 bg-background-400 mx-2" />
-        
-        {/* Add Video button */}
-        <button
-          onClick={handleAddVideo}
-          className="px-2 py-1 text-xs bg-green-600/20 hover:bg-green-600/30 text-green-400 
-                     rounded flex items-center gap-1"
-          title="Add another video to timeline"
-        >
-          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-          </svg>
-          Add Video
-        </button>
-        
-        <div className="flex-1" />
-        
-        {/* Crop toggle */}
-        <button
-          onClick={() => setCrop({ enabled: !crop.enabled })}
-          className={`px-2 py-1 text-xs rounded flex items-center gap-1 transition-colors
-                     ${crop.enabled 
-                       ? 'bg-primary-500 text-white' 
-                       : 'bg-background-300 hover:bg-background-400'}`}
-          title="Toggle crop overlay (C)"
-        >
-          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h10v10H7z" />
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7h3M7 4v3M17 20v-3M20 17h-3" />
-          </svg>
-          Crop
-        </button>
-        
-        <button
-          onClick={handleSplit}
-          disabled={selectedClipIds.length === 0}
-          className="px-2 py-1 text-xs bg-background-300 hover:bg-background-400 disabled:opacity-50 
-                     disabled:cursor-not-allowed rounded flex items-center gap-1"
-          title="Split clip at playhead (S)"
-        >
-          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m0-16l-4 4m4-4l4 4" />
-          </svg>
-          Split
-        </button>
-        
-        <button
-          onClick={handleDelete}
-          disabled={selectedClipIds.length === 0}
-          className="px-2 py-1 text-xs bg-red-600/20 hover:bg-red-600/30 text-red-400 
-                     disabled:opacity-50 disabled:cursor-not-allowed rounded flex items-center gap-1"
-          title="Delete selected clips (Del)"
-        >
-          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-          </svg>
-          Delete{selectedClipIds.length > 1 ? ` (${selectedClipIds.length})` : ''}
-        </button>
-        
-        <div className="w-px h-4 bg-background-400 mx-2" />
-        
-        <button
-          onClick={handleZoomOut}
-          className="p-1 text-text-700 hover:text-text-950"
-          title="Zoom out"
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM13 10H7" />
-          </svg>
-        </button>
-        <span className="text-xs text-text-700 w-12 text-center">{timelineZoom}px/s</span>
-        <button
-          onClick={handleZoomIn}
-          className="p-1 text-text-700 hover:text-text-950"
-          title="Zoom in"
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v6m3-3H7" />
-          </svg>
-        </button>
-      </div>
+    <div className="flex flex-col h-48 bg-background-200 border-t border-background-300">
+      <TimelineControls
+        onAddVideo={handleAddVideo}
+        onSplit={handleSplit}
+        onDelete={handleDelete}
+        onZoomIn={handleZoomIn}
+        onZoomOut={handleZoomOut}
+        selectedClipIds={selectedClipIds}
+        timelineZoom={timelineZoom}
+        crop={crop}
+        setCrop={setCrop}
+      />
 
-      {/* Timeline content */}
-      <div 
+      {/* Timeline content - scrollbar hidden, scroll via drag or wheel */}
+      <div
         ref={timelineRef}
-        className="flex-1 overflow-x-auto overflow-y-hidden relative select-none bg-background-300"
-        onClick={handleTimelineClick}
+        className="flex-1 overflow-x-scroll overflow-y-hidden relative select-none outline-none scrollbar-thin scrollbar-track-background-100 scrollbar-thumb-background-400"
+        onMouseDown={handleTimelineMouseDown}
+        onMouseMove={handleTimelineMouseMove}
+        onMouseUp={handleTimelineMouseUp}
+        onMouseLeave={handleTimelineMouseUp}
+        tabIndex={-1}
       >
-        <div className="relative" style={{ width: timelineWidth, height: '100%' }}>
-          {/* Time ruler */}
-          <div className="h-7 relative bg-background-200">
-            {/* Micro tick marks (smallest - 100ms) */}
-            {microMarkers.map(t => (
-              <div
-                key={`micro-${t}`}
-                className="absolute bottom-0 w-px"
-                style={{ 
-                  left: timelineInset + t * timelineZoom,
-                  height: '6px',
-                  background: 'var(--background-500)'
-                }}
-              />
-            ))}
-            
-            {/* Minor tick marks (medium - 500ms) */}
-            {minorMarkers.map(t => (
-              <div
-                key={`minor-${t}`}
-                className="absolute bottom-0 w-px"
-                style={{ 
-                  left: timelineInset + t * timelineZoom,
-                  height: '10px',
-                  background: 'var(--background-600)'
-                }}
-              />
-            ))}
-            
-            {/* Major markers with labels */}
-            {majorMarkers.map(t => (
-              <div
-                key={`major-${t}`}
-                className="absolute top-0 h-full flex flex-col items-start"
-                style={{ left: timelineInset + t * timelineZoom }}
-              >
-                <span className="text-[10px] text-text-700 mt-1 ml-1 font-medium tabular-nums">
-                  {formatTime(t)}
-                </span>
-                <div className="flex-1" />
-                <div 
-                  className="w-px" 
-                  style={{ 
-                    height: '14px',
-                    background: 'var(--background-500)'
-                  }} 
-                />
-              </div>
-            ))}
+        {/* Background layers that extend full width of scrollable area */}
+        <div className="absolute inset-0 bg-background-300 z-0" /> {/* Track background */}
+        <div className="absolute top-0 left-0 right-0 h-7 bg-background-100 z-0" /> {/* Ruler background */}
+        
+        <div className="relative h-full z-10" style={{ minWidth: timelineWidth }}>
+          {/* Time ruler - fixed height at top with dark background */}
+          <div className="h-7 relative">
+            <TimelineRuler
+              totalDuration={totalDuration}
+              timelineZoom={timelineZoom}
+              timelineWidth={timelineWidth}
+              timelineInset={timelineInset}
+            />
           </div>
 
-          {/* Ruler bottom divider with gradient */}
-          <div 
-            className="absolute left-0 right-0" 
-            style={{ 
-              top: 28, 
-              height: '1px',
-              background: 'var(--background-400)'
-            }} 
-          />
-
-          {/* Full-height grid lines */}
-          {majorMarkers.map(t => (
-            <div
-              key={`grid-major-${t}`}
-              className="absolute w-px"
-              style={{ 
-                left: timelineInset + t * timelineZoom,
-                top: 28,
-                bottom: 0,
-                background: 'var(--background-400)'
-              }}
-            />
-          ))}
-          {minorMarkers.map(t => (
-            <div
-              key={`grid-minor-${t}`}
-              className="absolute w-px"
-              style={{ 
-                left: timelineInset + t * timelineZoom,
-                top: 28,
-                bottom: 0,
-                background: 'var(--background-300)'
-              }}
-            />
-          ))}
-
-          {/* Track */}
-          <div className="h-16 relative mt-2">
-            
-            {/* Clips */}
-            {clips.map((clip, clipIndex) => {
-              const duration = clip.outPoint - clip.inPoint;
-              const width = duration * timelineZoom;
-              const left = timelineInset + clip.startTime * timelineZoom;
+          {/* Track area - fills all remaining space below ruler with lighter background */}
+          <div className="absolute left-0 right-0 bottom-0" style={{ top: '28px' }}>
+            {/* Render clips with thumbnails */}
+            {clips.map((clip) => {
               const isSelected = selectedClipIds.includes(clip.id);
-              
-              const isDragging = draggedClip?.id === clip.id;
-              
+              const clipWidth = (clip.outPoint - clip.inPoint) * timelineZoom;
+              const clipLeft = clip.startTime * timelineZoom + timelineInset;
+              const clipDuration = clip.outPoint - clip.inPoint;
+
               return (
-                <div
+                <div 
                   key={clip.id}
-                  ref={(el) => {
-                    if (el) clipElementsRef.current.set(clip.id, el);
-                    else clipElementsRef.current.delete(clip.id);
+                  className={`absolute top-0 bottom-0 rounded overflow-hidden cursor-pointer ${
+                    isSelected 
+                      ? 'ring-2 ring-blue-400 ring-offset-1 ring-offset-transparent' 
+                      : 'hover:ring-1 hover:ring-white/30'
+                  }`}
+                  style={{
+                    left: `${clipLeft}px`,
+                    width: `${clipWidth}px`,
                   }}
-                  className={`absolute top-1.5 bottom-1.5 rounded-md cursor-grab active:cursor-grabbing
-                              overflow-hidden ${isSelected 
-                                ? '' 
-                                : 'hover:brightness-110'}`}
-                  style={{ 
-                    left, 
-                    width: Math.max(width, 4),
-                    transition: isDragging ? 'none' : 'box-shadow 150ms, filter 150ms, border 150ms',
-                    willChange: isDragging ? 'left' : 'auto',
-                    background: 'var(--primary-600)',
-                    boxShadow: isSelected 
-                      ? '0 0 0 3px var(--primary-400), 0 4px 12px rgba(212, 119, 43, 0.5)'
-                      : '0 2px 8px rgba(0, 0, 0, 0.3)',
-                    border: isSelected ? '2px solid var(--primary-400)' : '2px solid transparent'
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleClipSelect(clip.id, e.shiftKey);
                   }}
-                  onMouseDown={(e) => handleClipMouseDown(e, clip, clipIndex)}
                 >
+                  {/* Video thumbnails */}
+                  <TimelineClipThumbnails
+                    videoFile={clip.sourceFile}
+                    inPoint={clip.inPoint}
+                    outPoint={clip.outPoint}
+                    clipWidth={clipWidth}
+                  />
                   
-                  <div className="px-2 py-1.5 text-xs text-white truncate h-full flex items-center overflow-hidden">
-                    <span className="truncate font-medium drop-shadow-sm">{clip.sourceFile.name}</span>
-                  </div>
-                  
-                  {/* Duration badge */}
-                  {width > 80 && (
-                    <div 
-                      className="absolute bottom-1.5 right-1.5 text-[10px] text-primary-100 px-1.5 py-0.5 rounded font-medium tabular-nums"
-                      style={{ background: 'rgba(0, 0, 0, 0.3)' }}
-                    >
-                      {formatTime(duration)}
+                  {/* Clip info overlay */}
+                  <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-2 py-1">
+                    <div className="text-white text-xs font-medium truncate">
+                      {clip.sourceFile.name}
                     </div>
+                    <div className="text-white/60 text-xs">
+                      {clipDuration.toFixed(1)}s
+                    </div>
+                  </div>
+
+                  {/* Selection border overlay */}
+                  {isSelected && (
+                    <div className="absolute inset-0 border-2 border-blue-400 rounded pointer-events-none" />
                   )}
-                  
-                  {/* Resize handles visual hint */}
-                  <div className="absolute left-0 top-0 bottom-0 w-1 bg-white/10 hover:bg-white/20 transition-colors" />
-                  <div className="absolute right-0 top-0 bottom-0 w-1 bg-white/10 hover:bg-white/20 transition-colors" />
                 </div>
               );
             })}
           </div>
 
-          {/* Snap line indicator */}
-          {snapLinePosition !== null && (
-            <div
-              className="absolute top-0 bottom-0 pointer-events-none z-20"
-              style={{ 
-                left: timelineInset + snapLinePosition * timelineZoom,
-                width: '2px',
-                background: '#22c55e',
-                boxShadow: '0 0 8px rgba(34, 197, 94, 0.8)'
-              }}
-            />
-          )}
-
           {/* Playhead */}
           <div
-            className="absolute top-0 bottom-0 cursor-ew-resize z-10"
-            style={{ 
-              left: timelineInset + playheadTime * timelineZoom,
+            className="absolute cursor-ew-resize z-20"
+            style={{
+              left: `${timelineInset + playheadTime * timelineZoom}px`,
+              top: '0px',
+              bottom: '0px',
               width: '2px',
-              background: 'linear-gradient(to bottom, #ef4444 0%, #dc2626 100%)',
-              boxShadow: '0 0 8px rgba(239, 68, 68, 0.5)'
             }}
-            onMouseDown={handlePlayheadMouseDown}
+            onMouseDown={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setIsDraggingPlayhead(true);
+            }}
           >
-            {/* Playhead handle */}
+            {/* Playhead line */}
             <div 
-              className="absolute -top-1 left-1/2 -translate-x-1/2" 
+              className="absolute inset-0 bg-red-500"
+              style={{ boxShadow: '0 0 6px rgba(239, 68, 68, 0.6)' }}
+            />
+            {/* Playhead handle (triangle at top) */}
+            <div
+              className="absolute -top-0 left-1/2 -translate-x-1/2"
               style={{
                 width: '12px',
                 height: '12px',
-                background: 'linear-gradient(to bottom, #f87171 0%, #ef4444 100%)',
+                background: '#ef4444',
                 clipPath: 'polygon(50% 100%, 0% 0%, 100% 0%)',
-                filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.3))'
               }}
             />
           </div>

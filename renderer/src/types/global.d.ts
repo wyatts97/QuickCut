@@ -6,6 +6,10 @@ export interface VideoFile {
   height: number;
   codec: string;
   format: string;
+  bitrate?: number;
+  frameRate?: number;
+  aspectRatio: string;
+  size: number;
 }
 
 export interface TrimParams {

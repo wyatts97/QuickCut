@@ -1,14 +1,32 @@
 import { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import { useStore, TimelineClip } from '../store/useStore';
+import { log } from '../utils/logger';
 
 type DragHandle = 'move' | 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | null;
 
+// Video frame cache for performance
+interface VideoFrameCache {
+  [key: string]: HTMLImageElement | null;
+}
+
+// Frame cache configuration
+const FRAME_CACHE_SIZE = 50;
+const FRAME_THROTTLE_MS = 100; // Throttle frame generation to 10fps
+
 export function VideoPreview() {
-  const { videoFile, clips, crop, setCrop, playheadTime } = useStore();
+  const { videoFile, clips, crop, setCrop, playheadTime, isPlaying } = useStore();
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [videoRect, setVideoRect] = useState({ x: 0, y: 0, width: 0, height: 0 });
   const [scale, setScale] = useState(1);
+  
+  // Refs for cleanup and performance
+  const frameCacheRef = useRef<VideoFrameCache>({});
+  const resizeObserverRef = useRef<ResizeObserver | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
+  const videoCleanupRef = useRef<(() => void) | null>(null);
+  const frameGenerationRef = useRef<number | null>(null);
+  const lastFrameTimeRef = useRef<number>(0);
   
   // Crop drag state
   const [dragHandle, setDragHandle] = useState<DragHandle>(null);
@@ -41,14 +59,104 @@ export function VideoPreview() {
     setScale(displayWidth / videoFile.width);
   }, [videoFile]);
 
+  // Frame caching utilities
+  const generateFrameKey = useCallback((time: number, path: string): string => {
+    return `${path}_${Math.floor(time * 10)}`; // 10fps precision
+  }, []);
+
+  const getCachedFrame = useCallback((key: string): HTMLImageElement | null => {
+    return frameCacheRef.current[key] || null;
+  }, []);
+
+  const setCachedFrame = useCallback((key: string, frame: HTMLImageElement): void => {
+    // Implement LRU cache - remove oldest frames if cache is full
+    const cache = frameCacheRef.current;
+    const keys = Object.keys(cache);
+    
+    if (keys.length >= FRAME_CACHE_SIZE) {
+      // Remove oldest frames (simple FIFO)
+      const keysToRemove = keys.slice(0, keys.length - FRAME_CACHE_SIZE + 1);
+      keysToRemove.forEach(oldKey => {
+        if (cache[oldKey]) {
+          cache[oldKey]!.src = '';
+        }
+        delete cache[oldKey];
+      });
+    }
+    
+    cache[key] = frame;
+  }, []);
+
+  const generateVideoFrame = useCallback((time: number): Promise<HTMLImageElement> => {
+    return new Promise((resolve, reject) => {
+      const video = videoRef.current;
+      if (!video) {
+        reject(new Error('Video element not available'));
+        return;
+      }
+
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        reject(new Error('Could not get canvas context'));
+        return;
+      }
+
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+
+      const originalTime = video.currentTime;
+      
+      const onSeeked = () => {
+        try {
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          
+          const img = new Image();
+          img.onload = () => {
+            // Restore original time
+            video.currentTime = originalTime;
+            resolve(img);
+          };
+          img.onerror = () => reject(new Error('Failed to create image'));
+          img.src = canvas.toDataURL('image/jpeg', 0.8);
+        } catch (error) {
+          video.currentTime = originalTime;
+          reject(error);
+        }
+        
+        video.removeEventListener('seeked', onSeeked);
+      };
+
+      video.addEventListener('seeked', onSeeked);
+      video.currentTime = time;
+    });
+  }, []);
+
   // Track current video source to switch between different clips
   const [currentVideoPath, setCurrentVideoPath] = useState<string | null>(null);
 
+  // Optimized video rect calculation with ResizeObserver
   useEffect(() => {
+    const container = containerRef.current;
+    if (!container || !videoFile) return;
+
+    // Use ResizeObserver for better performance than window resize
+    resizeObserverRef.current = new ResizeObserver(() => {
+      updateVideoRect();
+    });
+    
+    resizeObserverRef.current.observe(container);
+    
+    // Initial calculation
     updateVideoRect();
-    window.addEventListener('resize', updateVideoRect);
-    return () => window.removeEventListener('resize', updateVideoRect);
-  }, [updateVideoRect]);
+
+    return () => {
+      if (resizeObserverRef.current) {
+        resizeObserverRef.current.disconnect();
+        resizeObserverRef.current = null;
+      }
+    };
+  }, [updateVideoRect, videoFile]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -80,29 +188,160 @@ export function VideoPreview() {
     return activeClip.inPoint + (playheadTime - activeClip.startTime);
   }, [activeClip, playheadTime]);
 
-  // Update video source when active clip changes (for multi-video timeline)
+  // Optimized video source loading with proper cleanup
   useEffect(() => {
-    if (videoRef.current) {
-      const targetPath = activeClip?.sourceFile.path || videoFile?.path;
-      if (targetPath && targetPath !== currentVideoPath) {
-        videoRef.current.src = `local-file://${targetPath}`;
-        setCurrentVideoPath(targetPath);
+    const video = videoRef.current;
+    if (!video) return;
+
+    const targetPath = activeClip?.sourceFile.path || videoFile?.path;
+    if (targetPath && targetPath !== currentVideoPath) {
+      const videoSrc = `local-file://${targetPath}`;
+      
+      // Cleanup previous video event listeners
+      if (videoCleanupRef.current) {
+        videoCleanupRef.current();
       }
+      
+      // Set new source
+      video.src = videoSrc;
+      setCurrentVideoPath(targetPath);
+      
+      // Create new event handlers with cleanup function
+      const handleError = (e: Event) => {
+        log.error('Video loading error', `Error: ${e}, VideoPath: ${activeClip?.sourceFile.path}`);
+        log.error('Video error code', `ErrorCode: ${video.error}, VideoPath: ${activeClip?.sourceFile.path}`);
+      };
+      
+      const handleLoadedData = () => {
+        log.video('Video loaded successfully', { videoPath: activeClip?.sourceFile.path, duration: video.duration });
+      };
+      
+      video.addEventListener('error', handleError);
+      video.addEventListener('loadeddata', handleLoadedData);
+      
+      // Store cleanup function
+      videoCleanupRef.current = () => {
+        video.removeEventListener('error', handleError);
+        video.removeEventListener('loadeddata', handleLoadedData);
+      };
     }
   }, [activeClip?.sourceFile.path, videoFile?.path, currentVideoPath]);
 
-  // Sync video with timeline playhead - now respects clip in/out points
+  // Optimized video seeking with frame caching and throttling
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !videoFile || sourceTime === null) return;
+    
+    // Only seek if difference is significant (avoid micro-updates)
+    if (Math.abs(video.currentTime - sourceTime) > 0.05) {
+      // Cancel any pending animation frame
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+      
+      // Throttle seeking to improve performance
+      const now = Date.now();
+      if (now - lastFrameTimeRef.current < FRAME_THROTTLE_MS) {
+        animationFrameRef.current = requestAnimationFrame(() => {
+          if (video && sourceTime !== null) {
+            video.currentTime = sourceTime;
+          }
+        });
+        return;
+      }
+      
+      lastFrameTimeRef.current = now;
+      
+      // Use requestAnimationFrame for smoother seeking
+      animationFrameRef.current = requestAnimationFrame(() => {
+        if (video && sourceTime !== null) {
+          video.currentTime = sourceTime;
+        }
+      });
+    }
+    
+    return () => {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+        animationFrameRef.current = null;
+      }
+    };
+  }, [sourceTime, videoFile]);
+
+  // Optimized video playback control with proper cleanup
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !videoFile) return;
+
+    // Check if playhead is in dead space (no active clip)
+    const isInDeadSpace = activeClip === null;
     
-    if (sourceTime !== null) {
-      // Only seek if difference is significant (avoid micro-updates)
-      if (Math.abs(video.currentTime - sourceTime) > 0.05) {
-        video.currentTime = sourceTime;
-      }
+    let playPromise: Promise<void> | null = null;
+    
+    if (isPlaying && !isInDeadSpace) {
+      // Play the video if not in dead space
+      playPromise = video.play().catch(error => {
+        log.error('Video play error', `Error: ${error}, CurrentTime: ${video.currentTime}, Paused: ${video.paused}`);
+      });
+    } else {
+      // Pause the video if not playing or in dead space
+      video.pause();
     }
-  }, [sourceTime, videoFile]);
+    
+    // Cleanup function to handle component unmount during playback
+    return () => {
+      if (playPromise) {
+        playPromise.catch(() => {}); // Suppress unhandled promise rejection
+      }
+      video.pause();
+    };
+  }, [isPlaying, activeClip, videoFile]);
+
+  // Comprehensive cleanup effect
+  useEffect(() => {
+    return () => {
+      // Cleanup all resources on component unmount
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+        animationFrameRef.current = null;
+      }
+      
+      if (frameGenerationRef.current) {
+        cancelAnimationFrame(frameGenerationRef.current);
+        frameGenerationRef.current = null;
+      }
+      
+      if (resizeObserverRef.current) {
+        resizeObserverRef.current.disconnect();
+        resizeObserverRef.current = null;
+      }
+      
+      if (videoCleanupRef.current) {
+        videoCleanupRef.current();
+        videoCleanupRef.current = null;
+      }
+      
+      // Clear frame cache
+      if (frameCacheRef.current) {
+        Object.values(frameCacheRef.current).forEach(img => {
+          if (img) {
+            img.src = '';
+          }
+        });
+        frameCacheRef.current = {};
+      }
+      
+      // Cleanup video element
+      if (videoRef.current) {
+        videoRef.current.pause();
+        videoRef.current.src = '';
+        videoRef.current.load();
+      }
+      
+      // Reset timing refs
+      lastFrameTimeRef.current = 0;
+    };
+  }, []);
 
   // Handle crop drag
   const handleMouseDown = (e: React.MouseEvent, handle: DragHandle) => {
@@ -214,7 +453,7 @@ export function VideoPreview() {
   };
 
   // Check if playhead is in dead space (no active clip)
-  const isInDeadSpace = activeClip === null;
+  const isInDeadSpace = activeClip === null && clips.length > 0;
 
   return (
     <div className="flex-1 flex flex-col bg-background-200 rounded-xl overflow-hidden">
@@ -224,20 +463,30 @@ export function VideoPreview() {
         className="flex-1 relative bg-black min-h-0 overflow-hidden"
         style={{ cursor: dragHandle ? 'grabbing' : 'default' }}
       >
-        {/* Show black screen when in dead space */}
-        {isInDeadSpace ? (
-          <div className="absolute inset-0 bg-black" />
-        ) : (
-          <video
-            ref={videoRef}
-            className="absolute object-contain"
-            style={{
-              left: videoRect.x,
-              top: videoRect.y,
-              width: videoRect.width,
-              height: videoRect.height,
-            }}
-          />
+        {/* Video element - always rendered to maintain state */}
+        <video
+          ref={videoRef}
+          className="absolute object-contain"
+          style={{
+            left: videoRect.x,
+            top: videoRect.y,
+            width: videoRect.width,
+            height: videoRect.height,
+            opacity: isInDeadSpace ? 0.3 : 1,
+          }}
+          controls={false}
+          autoPlay={false}
+          muted={false}
+          playsInline={true}
+        />
+        
+        {/* Dead space indicator overlay */}
+        {isInDeadSpace && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black/50">
+            <div className="text-white/60 text-sm">
+              Playhead is outside clip range
+            </div>
+          </div>
         )}
 
         {/* Crop overlay */}
@@ -315,11 +564,11 @@ export function VideoPreview() {
 
               {/* Edge handles */}
               <div 
-                className="absolute left-1/2 -translate-x-1/2 -top-2 w-8 h-4 bg-blue-500 rounded-sm cursor-n-resize shadow-lg"
+                className="absolute top-1/2 -translate-x-1/2 -top-2 w-8 h-4 bg-blue-500 rounded-sm cursor-n-resize shadow-lg"
                 onMouseDown={(e) => handleMouseDown(e, 'n')}
               />
               <div 
-                className="absolute left-1/2 -translate-x-1/2 -bottom-2 w-8 h-4 bg-blue-500 rounded-sm cursor-s-resize shadow-lg"
+                className="absolute top-1/2 -translate-x-1/2 -bottom-2 w-8 h-4 bg-blue-500 rounded-sm cursor-s-resize shadow-lg"
                 onMouseDown={(e) => handleMouseDown(e, 's')}
               />
               <div 

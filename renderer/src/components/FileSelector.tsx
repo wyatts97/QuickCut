@@ -1,5 +1,18 @@
 import { useStore } from '../store/useStore';
 
+// Format duration in seconds to readable format (MM:SS or HH:MM:SS)
+const formatDuration = (seconds: number): string => {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = Math.floor(seconds % 60);
+  
+  if (hours > 0) {
+    return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  } else {
+    return `${minutes}:${secs.toString().padStart(2, '0')}`;
+  }
+};
+
 export function FileSelector() {
   const { videoFile, setVideoFile, processingStatus } = useStore();
 
@@ -33,19 +46,39 @@ export function FileSelector() {
           <p className="text-text-900 font-medium truncate" title={videoFile.name}>
             {videoFile.name}
           </p>
-          <div className="mt-2 grid grid-cols-2 gap-2 text-text-700 text-xs min-w-0">
-            <span className="truncate" title={`Duration: ${videoFile.duration.toFixed(2)}s`}>
-              Duration: {videoFile.duration.toFixed(2)}s
-            </span>
-            <span className="truncate" title={`Size: ${videoFile.width}×${videoFile.height}`}>
-              Size: {videoFile.width}×{videoFile.height}
-            </span>
-            <span className="truncate" title={`Codec: ${videoFile.codec}`}>
-              Codec: {videoFile.codec}
-            </span>
-            <span className="truncate" title={`Format: ${videoFile.format}`}>
-              Format: {videoFile.format}
-            </span>
+          <div className="mt-3 space-y-2 text-xs">
+            {/* File Type and Size */}
+            <div className="flex justify-between items-center">
+              <span className="text-text-600">File Type:</span>
+              <span className="text-text-900 font-medium">{videoFile.format ? videoFile.format.toUpperCase() : 'N/A'}</span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-text-600">File Size:</span>
+              <span className="text-text-900 font-medium">
+                {videoFile.size && !isNaN(videoFile.size) 
+                  ? `${(videoFile.size / (1024 * 1024)).toFixed(1)} MB` 
+                  : 'N/A'
+                }
+              </span>
+            </div>
+            
+            {/* Video Dimensions */}
+            <div className="flex justify-between items-center">
+              <span className="text-text-600">Dimensions:</span>
+              <span className="text-text-900 font-medium">{videoFile.width} × {videoFile.height}</span>
+            </div>
+            
+            {/* Duration */}
+            <div className="flex justify-between items-center">
+              <span className="text-text-600">Duration:</span>
+              <span className="text-text-900 font-medium">{formatDuration(videoFile.duration)}</span>
+            </div>
+            
+            {/* Codec */}
+            <div className="flex justify-between items-center">
+              <span className="text-text-600">Codec:</span>
+              <span className="text-text-900 font-medium">{videoFile.codec}</span>
+            </div>
           </div>
         </div>
       )}

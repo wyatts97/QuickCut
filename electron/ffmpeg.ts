@@ -202,8 +202,13 @@ export async function getVideoMetadata(inputPath: string): Promise<{
   height: number;
   codec: string;
   format: string;
+  size: number;
 }> {
   return new Promise((resolve, reject) => {
+    // Get file size
+    const stats = require('fs').statSync(inputPath);
+    const fileSize = stats.size;
+
     const ffprobe = spawn(getFFprobePath(), [
       '-v', 'error',
       '-select_streams', 'v:0',
@@ -223,12 +228,17 @@ export async function getVideoMetadata(inputPath: string): Promise<{
           const data = JSON.parse(output);
           const stream = data.streams?.[0] || {};
           const format = data.format || {};
+          
+          // Get file extension for actual format
+          const fileExtension = path.extname(inputPath).toLowerCase().substring(1);
+          
           resolve({
             duration: parseFloat(format.duration) || 0,
             width: stream.width || 0,
             height: stream.height || 0,
             codec: stream.codec_name || 'unknown',
-            format: format.format_name || 'unknown'
+            format: fileExtension || 'unknown',
+            size: fileSize
           });
         } catch (e) {
           reject(new Error('Failed to parse video metadata'));

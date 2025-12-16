@@ -176,10 +176,11 @@ input[type="number"] {
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
+  background: var(--background-100);
 }
 
 ::-webkit-scrollbar-track {
-  background: var(--background-200);
+  background: var(--background-100);
 }
 
 ::-webkit-scrollbar-thumb {
@@ -188,5 +189,45 @@ input[type="number"] {
 }
 
 ::-webkit-scrollbar-thumb:hover {
+  background: var(--background-500);
+}
+
+/* Remove default focus outlines and selection colors */
+*:focus {
+  outline: none;
+}
+
+::selection {
+  background: var(--primary-500);
+  color: white;
+}
+
+/* Fix scrollbar corner */
+::-webkit-scrollbar-corner {
+  background: var(--background-200);
+}
+
+/* Force scrollbar styling on all elements */
+* {
+  scrollbar-color: var(--background-400) var(--background-100);
+  scrollbar-width: thin;
+}
+
+/* Timeline specific scrollbar styling */
+.timeline-scrollbar::-webkit-scrollbar {
+  height: 6px;
+  background: var(--background-100);
+}
+
+.timeline-scrollbar::-webkit-scrollbar-track {
+  background: var(--background-100);
+}
+
+.timeline-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--background-400);
+  border-radius: 3px;
+}
+
+.timeline-scrollbar::-webkit-scrollbar-thumb:hover {
   background: var(--background-500);
 }

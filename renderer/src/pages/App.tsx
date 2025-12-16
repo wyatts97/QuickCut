@@ -8,7 +8,14 @@ import {
   ExportSettings,
   WelcomeScreen,
   SettingsScreen,
+  ColorGrading,
 } from '../components';
+import { 
+  ErrorBoundary, 
+  VideoPreviewErrorBoundary, 
+  TimelineErrorBoundary,
+  SettingsErrorBoundary 
+} from '../components/ErrorBoundary';
 import { useStore } from '../store/useStore';
 
 function EditorScreen() {
@@ -165,22 +172,39 @@ function EditorScreen() {
       <main className="flex-1 flex overflow-hidden min-h-0">
         {/* Left Panel - Controls */}
         <aside className="w-72 flex-shrink-0 border-r border-background-200 overflow-y-auto p-3 space-y-3">
-          <FileSelector />
-          <ExportSettings />
-          <ExportButton />
+          <ErrorBoundary>
+            <FileSelector />
+          </ErrorBoundary>
+          <ErrorBoundary>
+            <ColorGrading />
+          </ErrorBoundary>
+          <ErrorBoundary>
+            <ExportSettings />
+          </ErrorBoundary>
+          <ErrorBoundary>
+            <ExportButton />
+          </ErrorBoundary>
         </aside>
 
         {/* Right Panel - Preview */}
         <section className="flex-1 p-3 flex flex-col min-w-0">
-          <VideoPreview />
+          <VideoPreviewErrorBoundary>
+            <VideoPreview />
+          </VideoPreviewErrorBoundary>
         </section>
       </main>
 
       {/* Timeline */}
-      <Timeline />
+      <footer className="flex-shrink-0">
+        <TimelineErrorBoundary>
+          <Timeline />
+        </TimelineErrorBoundary>
+      </footer>
 
       {/* Progress Notification */}
-      <ProgressBar />
+      <ErrorBoundary>
+        <ProgressBar />
+      </ErrorBoundary>
     </div>
   );
 }
@@ -195,11 +219,23 @@ export default function App() {
 
   switch (currentScreen) {
     case 'welcome':
-      return <WelcomeScreen />;
+      return (
+        <ErrorBoundary>
+          <WelcomeScreen />
+        </ErrorBoundary>
+      );
     case 'settings':
-      return <SettingsScreen />;
+      return (
+        <SettingsErrorBoundary>
+          <SettingsScreen />
+        </SettingsErrorBoundary>
+      );
     case 'editor':
     default:
-      return <EditorScreen />;
+      return (
+        <ErrorBoundary>
+          <EditorScreen />
+        </ErrorBoundary>
+      );
   }
 }

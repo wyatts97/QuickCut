@@ -79,9 +79,6 @@ export function ExportSettings() {
     <div className="bg-background-200 rounded-lg p-4 space-y-4">
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-medium text-text-900">Export Settings</h3>
-        {estimateFileSize() && (
-          <span className="text-xs text-text-700">Est. {estimateFileSize()}</span>
-        )}
       </div>
 
       {/* Export options */}
@@ -191,7 +188,7 @@ export function ExportSettings() {
               value={exportSettings.crf}
               onChange={(e) => setExportSettings({ crf: parseInt(e.target.value) })}
               disabled={isDisabled}
-              className="w-full h-2 bg-background-400 rounded-lg appearance-none cursor-pointer
+              className="w-full h-2 bg-background-400 rounded-lg appearance-none cursor-pointer accent-primary-500
                          disabled:opacity-50 disabled:cursor-not-allowed"
             />
           </div>
